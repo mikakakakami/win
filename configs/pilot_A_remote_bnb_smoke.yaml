@@ -1,0 +1,62 @@
+# Pilot-A REMOTE SMOKE (bnb_nf4 substitute for GPTQ-4bit)
+# Used because AutoGPTQ on remote A800 has no CUDA extension and hangs at pack/save.
+# This is NOT the formal Pilot-A; it's a link-test:
+#   - smaller scale (100 prompts vs 500)
+#   - bnb NF4 instead of GPTQ-4bit (both are 4-bit weight-only quant; logit perturbation magnitude is comparable)
+#   - WANDA still off
+# Once this passes the BF16 impl check + shows NF4 drop, we know the pipeline works,
+# then move to formal GPTQ-4bit (via GPTQModel) for the published Pilot-A numbers.
+
+model:
+  hf_id: /root/autodl-tmp/models/hub/models--NousResearch--Meta-Llama-3-8B-Instruct/snapshots/53346005fb0ef11d3b6a83b12c895cca40156b6c
+  dtype: bfloat16
+
+generation:
+  prompt_words: 30
+  max_new_tokens: 200
+  min_new_tokens: 180
+  top_p: 0.95
+  temperature: 1.0
+  do_sample: true
+  seed: 0
+
+watermark:
+  scheme: mpac
+  message_bits: 20
+  radix: 4
+  delta: 4.0           # bumped from 2.0 to fix BF16 baseline (was 0.03 exact_match)
+  secret_key: 13371337
+
+prompts:
+  source: c4
+  n_prompts: 100         # smoke scale
+  num_messages: 10
+  message_seed_base: 1000
+
+pipelines:
+  - name: bf16
+    kind: bf16
+    enabled: true
+  - name: bnb_nf4
+    kind: bnb4
+    enabled: true
+  - name: gptq4
+    kind: gptq4
+    enabled: false       # blocked by AutoGPTQ CUDA ext on remote
+  - name: wanda50
+    kind: wanda50
+    enabled: false       # blocked by WANDA integration
+
+diagnostics:
+  margin_flip:
+    enabled: false        # only run on formal Pilot-A
+    n_prompts: 50
+    top_k_logits: 10
+
+decision:
+  fp16_min_exact_match: 0.85
+  drop_threshold: 0.15
+  spearman_threshold: -0.4
+
+output:
+  root: results/pilot_A_remote_bnb_smoke

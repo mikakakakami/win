@@ -1,0 +1,57 @@
+# Pilot-A: baseline drop confirmation
+# Goal: verify MPAC (Yoo 2024) exact_match drops >= 0.15 under GPTQ-4bit OR WANDA-50%
+
+model:
+  hf_id: meta-llama/Meta-Llama-3-8B-Instruct
+  dtype: bfloat16
+
+generation:
+  prompt_words: 30          # whitespace-words sliced from C4 row
+  max_new_tokens: 200
+  min_new_tokens: 180       # discard generations below this
+  top_p: 0.95
+  temperature: 1.0
+  do_sample: true
+  seed: 0                    # base seed (per-prompt seed = base + prompt_idx)
+
+watermark:
+  scheme: mpac
+  message_bits: 20
+  radix: 4
+  delta: 4.0           # bumped from 2.0 -> 4.0; r=4 colorlist needs more bias to dominate the 3 wrong sublists. Yoo 2024 also uses delta>=2 in r=4.
+  secret_key: 13371337
+
+prompts:
+  source: c4
+  n_prompts: 500
+  num_messages: 20           # 20 distinct messages, each applied to 25 prompts -> 500 pairs
+  message_seed_base: 1000
+
+pipelines:
+  - name: bf16
+    kind: bf16
+    enabled: true
+  - name: gptq4
+    kind: gptq4
+    enabled: true
+    save_dir: models/llama3-8b-instruct-gptq4
+    calib_n: 128
+    calib_seq_len: 2048
+  - name: wanda50
+    kind: wanda50
+    enabled: false                    # flip to true once external/wanda is wired
+    save_dir: models/llama3-8b-instruct-wanda50
+
+diagnostics:
+  margin_flip:
+    enabled: true
+    n_prompts: 50                      # subset of generation prompts for margin/flip measurement
+    top_k_logits: 10
+
+decision:
+  fp16_min_exact_match: 0.85           # below this -> baseline impl is broken
+  drop_threshold: 0.15                 # absolute drop in exact_match for H1 to pass
+  spearman_threshold: -0.4             # H2 pass: rho(margin, flip) <= this
+
+output:
+  root: results/pilot_A

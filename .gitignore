@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+results/
+*.log
+*.pt
+*.bin
+*.safetensors
+checkpoints/
+hf_cache/
+wandb/
+
+# Allow keepers
+!results/.gitkeep
