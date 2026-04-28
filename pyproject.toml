@@ -4,16 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wmark"
-version = "0.0.1"
+version = "0.1.0"
 description = "Multi-bit LLM watermarking under model compression"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1",
     "transformers>=4.40",
     "accelerate>=0.30",
-    "bitsandbytes>=0.43",
-    "auto-gptq>=0.7",
-    "autoawq>=0.2.5",
     "datasets>=2.18",
     "numpy>=1.26",
     "scipy>=1.12",
@@ -29,3 +26,11 @@ where = ["src"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4"]
+quant = [
+    "bitsandbytes>=0.43",
+    "gptqmodel>=1.0",
+    "autoawq>=0.2.5",
+]
+all = [
+    "wmark[dev,quant]",
+]
