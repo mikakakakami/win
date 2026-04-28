@@ -20,6 +20,8 @@ Thumbs.db
 
 # Project-specific
 results/
+models/
+external/
 *.log
 *.pt
 *.bin
@@ -30,3 +32,4 @@ wandb/
 
 # Allow keepers
 !results/.gitkeep
+!paper/.gitkeep

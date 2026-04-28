@@ -15,13 +15,25 @@ on LLaMA-3-8B-Instruct with 20-bit msg, 200 tokens, default params -- if not, fi
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
 import torch
-from transformers import LogitsProcessor
+
+try:
+    from transformers import LogitsProcessor as _Base
+except ImportError:
+    _Base = object  # type: ignore[misc,assignment]
 
 from .utils import bits_to_radix, derive_seed, radix_to_bits, torch_generator
+
+_SUBLIST_CACHE_MAX = 512
+_sublist_cache: OrderedDict[tuple[int, int, int], torch.Tensor] = OrderedDict()
+
+
+def clear_sublist_cache():
+    _sublist_cache.clear()
 
 
 @dataclass
@@ -32,7 +44,7 @@ class MPACConfig:
     skip_first: int = 1         # do not watermark the very first generation step (no prev token at start of prompt; transformers handles this but we also gate)
 
 
-class MPACLogitsProcessor(LogitsProcessor):
+class MPACLogitsProcessor(_Base):
     """LogitsProcessor that injects MPAC bias for a given message m (binary list).
 
     The processor tracks the position-relative-to-prompt by remembering the input length.
@@ -69,7 +81,16 @@ class MPACLogitsProcessor(LogitsProcessor):
 
 
 def _sublist_assignment(prev_token_id: int, vocab: int, cfg: MPACConfig) -> torch.Tensor:
-    """Map every token id -> sublist index in [0, r). Deterministic given (key, prev_token)."""
+    """Map every token id -> sublist index in [0, r). Deterministic given (key, prev_token).
+
+    Results are LRU-cached (up to _SUBLIST_CACHE_MAX entries) to avoid
+    recomputing the expensive randperm(vocab) on repeated prev_token values.
+    """
+    key = (cfg.secret_key, cfg.radix, prev_token_id, vocab)
+    if key in _sublist_cache:
+        _sublist_cache.move_to_end(key)
+        return _sublist_cache[key]
+
     seed = derive_seed(cfg.secret_key, prev_token_id, "part")
     g = torch_generator(seed, device="cpu")
     perm = torch.randperm(vocab, generator=g)
@@ -81,6 +102,10 @@ def _sublist_assignment(prev_token_id: int, vocab: int, cfg: MPACConfig) -> torc
         else:
             sl = perm[i * sub_size :]
         assignments[sl] = i
+
+    if len(_sublist_cache) >= _SUBLIST_CACHE_MAX:
+        _sublist_cache.popitem(last=False)
+    _sublist_cache[key] = assignments
     return assignments
 
 

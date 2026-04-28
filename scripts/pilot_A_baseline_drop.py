@@ -26,10 +26,10 @@ from tqdm import tqdm
 _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
 
+from wmark.compress import compress_awq4, compress_gptq4, compress_wanda, load_model
 from wmark.data import load_c4_prompts
 from wmark.metrics import aggregate
 from wmark.mpac import MPACConfig, MPACLogitsProcessor, decode_message
-from wmark.quantize import load_compressed, prune_wanda_50, quantize_gptq_4bit
 from wmark.utils import random_message
 
 
@@ -69,20 +69,23 @@ def stage_prepare(cfg: dict, out_root: Path) -> dict:
 
 
 def stage_compress(cfg: dict):
+    compress_fn = {
+        "gptq4": compress_gptq4,
+        "awq4": compress_awq4,
+        "wanda50": lambda mid, sd, **kw: compress_wanda(mid, sd, sparsity=0.5, **kw),
+    }
     for p in cfg["pipelines"]:
         if not p["enabled"]:
             continue
-        if p["kind"] == "gptq4":
-            quantize_gptq_4bit(
-                cfg["model"]["hf_id"],
-                p["save_dir"],
-                n_calib=p.get("calib_n", 128),
-                seq_len=p.get("calib_seq_len", 2048),
-            )
-        elif p["kind"] == "wanda50":
-            prune_wanda_50(cfg["model"]["hf_id"], p["save_dir"])
-        elif p["kind"] == "bf16":
-            pass
+        fn = compress_fn.get(p["kind"])
+        if fn is None:
+            continue
+        fn(
+            cfg["model"]["hf_id"],
+            p["save_dir"],
+            n_calib=p.get("calib_n", 128),
+            seq_len=p.get("calib_seq_len", 2048),
+        )
 
 
 def _build_mpac_cfg(cfg: dict) -> MPACConfig:
@@ -119,7 +122,7 @@ def stage_generate(cfg: dict, out_root: Path, prompts: list[str], messages: list
 
         model_path = pipe.get("save_dir") or cfg["model"]["hf_id"]
         print(f"[generate] loading model for pipeline {pipe['name']} from {model_path}")
-        model = load_compressed(model_path, kind=pipe["kind"])
+        model = load_model(model_path, method=pipe["kind"])
         model.eval()
         device = next(model.parameters()).device
         # Use the model's actual output dim, NOT len(tokenizer): for LLaMA-3 these can differ.
@@ -210,9 +213,9 @@ def stage_margin_flip(cfg: dict, out_root: Path):
     if not cfg["diagnostics"]["margin_flip"]["enabled"]:
         return
     bf_pipe = next((p for p in cfg["pipelines"] if p["kind"] == "bf16" and p["enabled"]), None)
-    cmp_pipe = next((p for p in cfg["pipelines"] if p["kind"] == "gptq4" and p["enabled"]), None)
+    cmp_pipe = next((p for p in cfg["pipelines"] if p["kind"] != "bf16" and p["enabled"]), None)
     if bf_pipe is None or cmp_pipe is None:
-        print("[margin_flip] need bf16 + gptq4 enabled, skipping")
+        print("[margin_flip] need bf16 + at least one compressed pipeline enabled, skipping")
         return
 
     from scipy.stats import spearmanr
@@ -223,7 +226,7 @@ def stage_margin_flip(cfg: dict, out_root: Path):
 
     print(f"[margin_flip] loading bf16 model for logits...")
     tokenizer = AutoTokenizer.from_pretrained(cfg["model"]["hf_id"], use_fast=True)
-    bf_model = load_compressed(cfg["model"]["hf_id"], kind="bf16")
+    bf_model = load_model(cfg["model"]["hf_id"], method="bf16")
     bf_model.eval()
     device = next(bf_model.parameters()).device
 
@@ -246,8 +249,10 @@ def stage_margin_flip(cfg: dict, out_root: Path):
     del bf_model
     torch.cuda.empty_cache()
 
-    print(f"[margin_flip] loading gptq4 model for logits...")
-    cmp_model = load_compressed(cmp_pipe["save_dir"], kind="gptq4")
+    print(f"[margin_flip] loading {cmp_pipe['name']} model for logits...")
+    cmp_model = load_model(
+        cmp_pipe.get("save_dir") or cfg["model"]["hf_id"], method=cmp_pipe["kind"],
+    )
     cmp_model.eval()
     flips: list[int] = []
     with torch.no_grad():
